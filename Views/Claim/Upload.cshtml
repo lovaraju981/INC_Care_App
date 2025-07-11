@@ -1,0 +1,64 @@
+﻿@{
+    ViewData["Title"] = "Upload Claims";
+}
+
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" />
+
+<style>
+    body, html {
+        height: 100%;
+    }
+    .center-wrapper {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        padding: 1rem;
+        background-color: #f8f9fa;
+    }
+</style>
+
+<div class="center-wrapper">
+    <div class="card shadow-lg border-0" style="width: 100%; max-width: 600px;">
+        <div class="card-header bg-primary text-white text-center">
+            <h4 class="mb-0"><i class="bi bi-file-earmark-pdf-fill"></i> Upload PDF Claims</h4>
+        </div>
+        <div class="card-body">
+            <form asp-action="Upload" asp-controller="Claim" method="post" enctype="multipart/form-data">
+                <div class="mb-4">
+                    <label class="form-label fw-semibold">Select PDF Files</label>
+                    <input class="form-control form-control-lg" type="file" name="files" accept=".pdf" multiple required />
+                    <small class="text-muted">Only .PDF files allowed</small>
+                </div>
+
+                <button type="submit" class="btn btn-success w-100 btn-lg">
+                    <i class="bi bi-cloud-upload-fill"></i> Upload & Process
+                </button>
+
+                <div id="spinner" class="text-center mt-4 d-none">
+                    <div class="spinner-border text-primary" role="status"></div>
+                    <p class="mt-2">Processing uploaded files...</p>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    const form = document.querySelector("form");
+    const fileInput = document.querySelector("input[type='file']");
+
+    form.addEventListener("submit", function (e) {
+        const files = fileInput.files;
+        for (let i = 0; i < files.length; i++) {
+            if (!files[i].name.toLowerCase().endsWith(".pdf")) {
+                alert("Only PDF files are allowed.");
+                e.preventDefault();
+                return;
+            }
+        }
+
+        document.getElementById("spinner")?.classList.remove("d-none");
+    });
+</script>
