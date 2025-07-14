@@ -163,7 +163,6 @@ namespace INC_Care_App.Controllers
                 Patient = patient,
                 ICardNumber = icard,
                 PolicyNumber = policyNo,
-                HospitalName = hospital,
                 DOA = doa,
                 AmountClaimed = claimed.ToString("N2"),
                 AmountSettled = settled.ToString("N2"),
@@ -221,10 +220,9 @@ namespace INC_Care_App.Controllers
             return new ClaimInfo
             {
                 Proposer = proposer,
-                Patient = patient,
-                ICardNumber = icard,
+                Patient = patient,               
                 PolicyNumber = policyNo,
-                HospitalName = hospital,
+                ClaimNumber = icard,
                 DOA = doa,
                 AmountClaimed = claimed.ToString("N2"),
                 AmountSettled = settled.ToString("N2"),
@@ -270,9 +268,8 @@ namespace INC_Care_App.Controllers
             {
                 Source="HDFC Bank",
                 Patient = patientName,
-                ICardNumber = uhidNo,
-                PolicyNumber = mainUhid,
-                HospitalName = hospital,
+                ClaimNumber = uhidNo,
+               // PolicyNumber = mainUhid,
                 DOA = doa,
                 AmountClaimed = billed.ToString("N2"),
                 AmountSettled = settled.ToString("N2"),

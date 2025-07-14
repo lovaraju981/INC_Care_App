@@ -1,4 +1,6 @@
-﻿@model List<INC_Care_App.Models.DTOs.ClaimInfo>
+﻿
+@model List<INC_Care_App.Models.DTOs.ClaimInfo>
+
 @{
     ViewData["Title"] = "Processed Claims";
 }
@@ -37,10 +39,12 @@
         margin-bottom: 1rem;
     }
 
-    .filters .form-control {
+    .filters .form-control,
+    .filters .form-select {
         min-width: 200px;
     }
 </style>
+
 
 <div class="result-container">
     <div class="card shadow border-0">
@@ -54,48 +58,56 @@
             }
             else
             {
+                <!-- ✅ Filters -->
                 <div class="filters">
                     <select id="sourceFilter" class="form-select">
                         <option value="">Filter by Source</option>
                         <option value="HERITAGE">HERITAGE HEALTH INSURANCE TPA PVT. LTD</option>
                         <option value="ICICI">ICICI Lombard Health Care</option>
-                        <option value="UNKNOWN">HDFC BANK</option>
+                        <option value="HDFC Bank">HDFC BANK</option>
                     </select>
 
                     <input type="text" id="patientFilter" class="form-control" placeholder="Search Patient Name..." />
+
+                    <select id="flagFilter" class="form-select">
+                        <option value="">Filter by Flag</option>
+                        <option value="positive">Difference > 0</option>
+                        <option value="zero">Difference = 0</option>
+                    </select>
                 </div>
 
+                <!-- ✅ Table -->
                 <div class="table-wrapper">
                     <table id="claimsTable" class="table table-bordered table-striped align-middle">
                         <thead class="table-success text-center">
                             <tr>
-                                <th>Source</th>
-                                <th>Proposer</th>
-                                <th>Patient</th>
-                                <th>I-Card No</th>
-                                <th>Policy No</th>
-                                <th>Hospital</th>
-                                <th>DOA</th>
-                                <th>Claimed</th>
-                                <th>Settled</th>
-                                <th>Difference</th>
-                                <th>Deductions</th>
+                                <th>Source</th>           <!-- 0 -->
+                                <th>Proposer</th>         <!-- 1 -->
+                                <th>Patient</th>          <!-- 2 -->
+                                <th>I-Card No</th>        <!-- 3 -->
+                                <th>Claim No</th>         <!-- 4 -->
+                                <th>Policy No</th>        <!-- 5 -->
+                                <th>DOA</th>              <!-- 6 -->
+                                <th>Claimed</th>          <!-- 7 -->
+                                <th>Settled</th>          <!-- 8 -->
+                                <th>Difference</th>       <!-- 9 ✅ -->
+                                <th>Deductions</th>       <!-- 10 -->
                             </tr>
                         </thead>
                         <tbody>
                             @foreach (var item in Model)
                             {
-                                <tr>
+                                <tr data-difference="@item.Difference">
                                     <td>@item.Source</td>
                                     <td>@item.Proposer</td>
                                     <td>@item.Patient</td>
                                     <td>@item.ICardNumber</td>
+                                    <td>@item.ClaimNumber</td>
                                     <td>@item.PolicyNumber</td>
-                                    <td>@item.HospitalName</td>
                                     <td class="text-nowrap">@item.DOA</td>
                                     <td class="text-end">@item.AmountClaimed</td>
                                     <td class="text-end">@item.AmountSettled</td>
-                                    <td class="text-end fw-bold red">@item.Difference</td>
+                                    <td class="text-end fw-bold red">@Convert.ToDecimal(item.Difference).ToString("F2")</td>
                                     <td style="min-width: 300px;">@Html.Raw(item.Deductions)</td>
                                 </tr>
                             }
@@ -113,7 +125,7 @@
     </div>
 </div>
 
-<!-- Scripts -->
+
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
@@ -131,5 +143,28 @@
         $('#patientFilter').on('keyup', function () {
             table.column(2).search(this.value).draw();
         });
+
+        // Clear old custom filter
+        function removeFlagFilter() {
+            $.fn.dataTable.ext.search = $.fn.dataTable.ext.search.filter(f => !f.name || f.name !== "flagSearch");
+        }
+
+        $('#flagFilter').on('change', function () {
+            var selected = $(this).val();
+            removeFlagFilter();
+
+            if (selected === "positive" || selected === "zero") {
+                $.fn.dataTable.ext.search.push(Object.assign(function flagSearch(settings, data, dataIndex) {
+                    const row = table.row(dataIndex).node();
+                    const rawDiff = parseFloat($(row).data("difference")) || 0;
+
+                    return selected === "positive" ? rawDiff > 0 : rawDiff === 0;
+                }, { name: "flagSearch" }));
+            }
+
+            table.draw();
+        });
     });
 </script>
+
+

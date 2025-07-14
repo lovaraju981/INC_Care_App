@@ -7,7 +7,7 @@
         public string Patient { get; set; }
         public string ICardNumber { get; set; }
         public string PolicyNumber { get; set; }
-        public string HospitalName { get; set; }
+        public string ClaimNumber { get; set; }
         public string DOA { get; set; }
         public string AmountClaimed { get; set; }
         public string AmountSettled { get; set; }
