@@ -2,6 +2,7 @@
 {
     public class ClaimInfo
     {
+        public string SourceKey { get; set; }
         public string Source { get; set; } 
         public string Proposer { get; set; }
         public string Patient { get; set; }
@@ -13,5 +14,7 @@
         public string AmountSettled { get; set; }
         public string Difference { get; set; }
         public string Deductions { get; set; }
+        public string AmountAuthorized { get; set; }
+        public string FinalAmount {  get; set; }
     }
 }

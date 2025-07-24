@@ -1,8 +1,14 @@
 ﻿
 using INC_Care_App.Models.DTOs;
 using Microsoft.AspNetCore.Mvc;
+using System.Data;
+using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using UglyToad.PdfPig;
+using static System.Net.Mime.MediaTypeNames;
+using static System.Runtime.InteropServices.JavaScript.JSType;
+using static UglyToad.PdfPig.Core.PdfSubpath;
 
 namespace INC_Care_App.Controllers
 {
@@ -87,65 +93,88 @@ namespace INC_Care_App.Controllers
         [HttpPost]
         public async Task<IActionResult> Upload(List<IFormFile> files)
         {
+
+
+            List<string> fileSequence = new List<string>();
+            fileSequence.Add("settlement letter");
+            fileSequence.Add("final auth");
+            fileSequence.Add("final bill");
+
             var claimList = new List<ClaimInfo>();
-
-            foreach (var file in files)
+            ClaimInfo claim = null;
+            foreach (var fileSeq in fileSequence)
             {
-                using var stream = file.OpenReadStream();
-                using var pdf = PdfDocument.Open(stream);
-                string pdfText = string.Join("\n", pdf.GetPages().Select(p => p.Text));
-
-                string source = GetSource(pdfText);
-
-                ClaimInfo claim = source switch
+                var file = files.FirstOrDefault(x => x.FileName.Contains(fileSeq, StringComparison.OrdinalIgnoreCase));
+                if (file != null)
                 {
-                    "HERITAGE" => ExtractFromHeritage(pdfText),
-                    "ICICI" => ExtractFromICICI(pdfText),
-                    "UNKNOWN" => ExtractFromFHPL(pdfText),
-                    _ => new ClaimInfo()
-                };
+                    using var stream = file.OpenReadStream();
+                    using var pdf = PdfDocument.Open(stream);
+                    string pdfText = string.Join("\n", pdf.GetPages().Select(p => p.Text));
 
-                claim.Source = source;
-                claimList.Add(claim);
+                    string sourceKey = GetSourceKey(pdfText);
+
+                    claim = sourceKey switch
+                    {
+                        "HERITAGE" => ExtractFromHeritage(pdfText, claim),
+                        "ICICI" => ExtractFromICICI(pdfText, claim),
+                        "UNIVERSAL" => ExtractFromFHPL(pdfText, claim),
+                        "UNKNOWN" => ExtractFromFHPL(pdfText, claim),
+                        _ => new ClaimInfo()
+                    };
+
+                    claim.SourceKey = sourceKey;
+                }
+
             }
+            claimList.Add(claim);
 
             return View("ResultView", claimList);
         }
 
-        private string GetSource(string pdfText)
+        private string GetSourceKey(string pdfText)
         {
-            return pdfText.Contains("HERITAGE") ? "HERITAGE"
-                 : pdfText.Contains("ICICI") ? "ICICI"
-                 : pdfText.Contains("FHPL") ? "FHPL"
+            return pdfText.Contains("HERITAGE", StringComparison.OrdinalIgnoreCase) ? "HERITAGE"
+                 : pdfText.Contains("ICICI", StringComparison.OrdinalIgnoreCase) ? "ICICI"
+                 : pdfText.Contains("FHPL", StringComparison.OrdinalIgnoreCase) ? "FHPL"
+                 : pdfText.Contains("UNIVERSAL", StringComparison.OrdinalIgnoreCase) ? "UNIVERSAL"
                  : "UNKNOWN";
         }
 
-        private ClaimInfo ExtractFromHeritage(string pdfText)
+        private ClaimInfo ExtractFromHeritage(string pdfText, ClaimInfo output)
         {
-            string proposer = ExtractValue(pdfText, @"Proposer/Employee Name\s*:\s*(.*?)\s*\(")
-                            ;
+            if (output == null)
+                output = new ClaimInfo();
+
+            string sourceName = ExtractValue(pdfText, @"TPA/Corporate\(1\)\s*:\s*([A-Z\s]+)", RegexOptions.IgnoreCase);
 
             string patient = ExtractValue(pdfText, @"Patient Name\s*:\s*(.*?)\s*\(");
-
 
             string icardLine = ExtractValue(pdfText, @"I-Card No\.?\s*:\s*(.*?)\n", RegexOptions.IgnoreCase);
             string icard = icardLine?.Split("Relation")[0].Trim();
 
-            string policyNo = ExtractValue(pdfText, @"Policy No\.?\s*:\s*(\d{10,})")
-                       ;
+            string policyNo = ExtractValue(pdfText, @"Policy No\.?\s*:\s*(\d{10,})");
             string hospital = ExtractValue(pdfText, @"Hospital Name\s*:\s*(.*?)\s*(\n|DOA|DOD)", RegexOptions.Singleline);
 
             string doa = ExtractValue(pdfText, @"DOA\s*:\s*(\d{2}/\d{2}/\d{4})");
 
-            string amountClaimedRaw = ExtractValue(pdfText, @"Amount Claimed\s*:\s*\n?\s*([\d,\.]+)", RegexOptions.Singleline)
-                ;
+            string amountClaimedRaw = ExtractValue(pdfText, @"Amount Claimed\s*:\s*\n?\s*([\d,\.]+)", RegexOptions.Singleline);
 
-            string amountSettledRaw = ExtractValue(pdfText, @"Amount Settled\s*:\s*\n?\s*([\d,\.]+)", RegexOptions.Singleline)
-                ;
+            string amountSettledRaw = ExtractValue(pdfText, @"Amount Settled\s*:\s*\n?\s*([\d,\.]+)", RegexOptions.Singleline);
 
+            string authAmountWords = ExtractValue(
+              pdfText, @"Total Authorized amount:-\s*Rs\.\s*([A-Za-z\s]+)\s*Only", RegexOptions.IgnoreCase);
+
+            var extractor = new AmountExtractor();
+            long? authNum = extractor.ConvertWordsToNumber(authAmountWords);
+            string authSource = authNum?.ToString() ?? authAmountWords;
+
+            decimal.TryParse(authSource?.Replace(",", ""), out var authorized);
             decimal.TryParse(amountClaimedRaw?.Replace(",", ""), out var claimed);
             decimal.TryParse(amountSettledRaw?.Replace(",", ""), out var settled);
-            var difference = claimed - settled;
+
+            string finalBill = ExtractValue(pdfText, @"Total Discount\s+[\d,]+\.\d{2}\s+([\d,]+\.\d{2})");
+
+            decimal.TryParse(finalBill?.Replace(",", ""), out var finalAmount);
 
             string deductionsRaw = ExtractValue(pdfText, @"Details of deductions\s*:\s*(.*?)(?=Sincerely yours|TEAM)", RegexOptions.Singleline) ?? ExtractValue(pdfText, @"Disallowance Reason\s*:?\s*(.*?)\n", RegexOptions.Singleline | RegexOptions.IgnoreCase)
         ;
@@ -154,130 +183,134 @@ namespace INC_Care_App.Controllers
                 .Replace("\n", "<br>")
                 .Trim();
 
+            output.Source = string.IsNullOrWhiteSpace(output.Source) ? sourceName : output.Source;
+            output.Patient = string.IsNullOrWhiteSpace(output.Patient) ? patient : output.Patient;
+            output.ICardNumber = string.IsNullOrWhiteSpace(output.ICardNumber) ? icard : output.ICardNumber;
+            output.PolicyNumber = string.IsNullOrWhiteSpace(output.PolicyNumber) ? policyNo : output.PolicyNumber;
+            output.DOA = string.IsNullOrWhiteSpace(output.DOA) ? doa : output.DOA;
+            //  output.AmountClaimed = string.IsNullOrWhiteSpace(output.AmountClaimed) ? claimed.ToString("N2") : output.AmountClaimed;
+            output.FinalAmount = string.IsNullOrWhiteSpace(output.FinalAmount) || output.FinalAmount == "0.00" ? finalAmount.ToString("N2") : output.FinalAmount;
+            output.AmountAuthorized = string.IsNullOrWhiteSpace(output.AmountAuthorized) || output.AmountAuthorized == "0.00" ? authorized.ToString("N2") : output.AmountAuthorized;
+            output.AmountSettled = string.IsNullOrWhiteSpace(output.AmountSettled) ? settled.ToString("N2") : output.AmountSettled;
+            decimal.TryParse(output.AmountAuthorized, out var authAmount);
+            decimal.TryParse(output.AmountSettled, out var settledAmount);
+            var difference = authAmount - settledAmount;
+            output.Difference = difference.ToString();
+            output.Deductions = string.IsNullOrWhiteSpace(output.Deductions) ? deductions : output.Deductions;
 
-            //string deductions = deductionsRaw?.Replace("\r\n", "<br>").Replace("\n", "<br>").Trim();
+            return output;
 
-            return new ClaimInfo
-            {
-                Proposer = proposer,
-                Patient = patient,
-                ICardNumber = icard,
-                PolicyNumber = policyNo,
-                DOA = doa,
-                AmountClaimed = claimed.ToString("N2"),
-                AmountSettled = settled.ToString("N2"),
-                Difference = difference.ToString("N2"),
-                Deductions = deductions?.Replace("\n", "<br>")
-            };
         }
 
-        private ClaimInfo ExtractFromICICI(string text)
+        private ClaimInfo ExtractFromICICI(string text, ClaimInfo output)
         {
-            // Extract block containing both names (2 lines after header)
-            string namesBlock = ExtractValue(text, @"EMPLOYEE NAME\s+MEMBER NAME\s*\n([^\n]+)\n([^\n]+)", RegexOptions.IgnoreCase);
+            if (output == null)
+                output = new ClaimInfo();
 
-            string proposer = null;
-            string patient = null;
+            string sourceName = ExtractValue(text, @"TPA/Corporate\(\d+\)\s*:\s*(.+?)(?:\r?\n|Bed\s|Ward\s|$)", RegexOptions.IgnoreCase);
 
-            if (!string.IsNullOrWhiteSpace(namesBlock))
-            {
-                var lines = namesBlock.Split('\n');
-                if (lines.Length >= 2)
-                {
-                    // First line: KRISHNA MOHAN     Adilakshmi
-                    // Second line: ANANTHARAJU      [blank or continuation]
-                    var firstLineParts = Regex.Split(lines[0].Trim(), @"\s{2,}");
-                    var secondLineParts = Regex.Split(lines[1].Trim(), @"\s{2,}");
+            string patient = ExtractValue(text, @"Name of the Patient\s*:\s*([A-Z\s]+?)(?=UHID)");
 
-                    proposer = (firstLineParts.ElementAtOrDefault(0) + " " + secondLineParts.ElementAtOrDefault(0))?.Trim();
-                    patient = (firstLineParts.ElementAtOrDefault(1) + " " + secondLineParts.ElementAtOrDefault(1))?.Trim();
-                }
-            }
+            string claimId = ExtractValue(text, @"Claim Number:\s*(\d+)");
 
-            string icard = ExtractValue(text, @"CLAIM NO\s*:?=?\s*(\d+)", RegexOptions.IgnoreCase);
-            string policyNo = ExtractValue(text, @"AL NO\s*:?=?\s*(\d+)", RegexOptions.IgnoreCase);
+            string policyNo = ExtractValue(text, @"Policy No\s*:\s*([A-Z0-9/]+)");
 
-            string hospitalLine = ExtractValue(text, @"Name Of Hospital\s*:?=?\s*(.*?)\s+Address of the Hospital", RegexOptions.IgnoreCase)
-                               ?? ExtractValue(text, @"HOSPITAL NAME\s*:?=?\s*(.*?)\s+(REQUESTED|NET)", RegexOptions.IgnoreCase);
-            string hospital = hospitalLine?.Trim();
+            string uhidNo = ExtractValue(text, @"UHID Number:\s*(\d+)");
 
-            string doa = ExtractValue(text, @"Date Of Admission\s*:?=?\s*(\d{2}-[A-Z]{3}-\d{2,4})", RegexOptions.IgnoreCase)
-                      ?? ExtractValue(text, @"DOA\s*:?=?\s*(\d{2}-[A-Z]{3}-\d{2,4})", RegexOptions.IgnoreCase);
+            string doa = ExtractValue(text, @"Date of Admission\s*:\s*(\d{2}-[A-Z]{3}-\d{4})");
 
-            string amountClaimedRaw = ExtractValue(text, @"Requested Amount in Rs\s*:?=?\s*([\d,]+)", RegexOptions.IgnoreCase)
-                                    ?? ExtractValue(text, @"REQUESTED\s+AMOUNT\s*[:=]?[\s\n]*([\d,]+)", RegexOptions.IgnoreCase);
+            string authAmountWords = ExtractValue(text, @"\(in words\)\s*Rupees\s+([A-Z\s]+?)\s+only", RegexOptions.IgnoreCase);
 
-            string amountSettledRaw = ExtractValue(text, @"Final Amount Settled in Rs\.?\s*:?=?\s*([\d,]+)", RegexOptions.IgnoreCase)
-                                    ?? ExtractValue(text, @"NET\s+SANCTIONED\s+AMOUNT\s*[:=]?[\s\n]*([\d,]+)", RegexOptions.IgnoreCase);
+            var extractor = new AmountExtractor();
+            long? authNum = extractor.ConvertWordsToNumber(authAmountWords);
+            string authSource = authNum?.ToString() ?? authAmountWords;
 
-            decimal.TryParse(amountClaimedRaw?.Replace(",", ""), out var claimed);
-            decimal.TryParse(amountSettledRaw?.Replace(",", ""), out var settled);
-            var difference = claimed - settled;
+            decimal.TryParse(authSource?.Replace(",", ""), out var authorized);
 
-            string deductionsRaw = ExtractValue(text, @"Sub Bill Breakup(.*?)Note:", RegexOptions.Singleline | RegexOptions.IgnoreCase);
-            string deductions = deductionsRaw?.Replace("\r\n", "<br>").Replace("\n", "<br>").Trim();
+            string finalBill = ExtractValue(text, @"Total Discount\s+[\d,]+\.\d{2}\s+([\d,]+\.\d{2})");
 
-            return new ClaimInfo
-            {
-                Proposer = proposer,
-                Patient = patient,               
-                PolicyNumber = policyNo,
-                ClaimNumber = icard,
-                DOA = doa,
-                AmountClaimed = claimed.ToString("N2"),
-                AmountSettled = settled.ToString("N2"),
-                Difference = difference.ToString("N2"),
-                Deductions = deductions
-            };
+            decimal.TryParse(finalBill?.Replace(",", ""), out var finalAmount);
+
+            string settledAmountRaw = ExtractValue(text, @"settled for\s+Rs\.?\s*([\d,]+)", RegexOptions.IgnoreCase);
+
+            decimal.TryParse(settledAmountRaw?.Replace(",", ""), out var settled);
+
+            string deductionsRaw = ExtractValue(text, @"Details of deductions\s*:\s*(.*?)(?=Sincerely yours|TEAM)", RegexOptions.Singleline) ?? ExtractValue(text, @"Disallowance Reason\s*:?\s*(.*?)\n", RegexOptions.Singleline | RegexOptions.IgnoreCase)
+        ;
+            string deductions = deductionsRaw?
+                .Replace("\r\n", "<br>")
+                .Replace("\n", "<br>")
+                .Trim();
+
+            output.Source = string.IsNullOrWhiteSpace(output.Source) ? sourceName : output.Source;
+            output.Patient = string.IsNullOrWhiteSpace(output.Patient) ? patient : output.Patient;
+            output.ClaimNumber = string.IsNullOrWhiteSpace(output.ClaimNumber) ? claimId : output.ClaimNumber;
+            output.PolicyNumber = string.IsNullOrWhiteSpace(output.PolicyNumber) ? policyNo : output.PolicyNumber;
+            output.DOA = string.IsNullOrWhiteSpace(output.DOA) ? doa : output.DOA;
+            output.FinalAmount = string.IsNullOrWhiteSpace(output.FinalAmount) || output.FinalAmount == "0.00" ? finalAmount.ToString("N2") : output.FinalAmount;
+            output.AmountAuthorized = string.IsNullOrWhiteSpace(output.AmountAuthorized) || output.AmountAuthorized == "0.00" ? authorized.ToString("N2") : output.AmountAuthorized;
+            output.AmountSettled = string.IsNullOrWhiteSpace(output.AmountSettled) ? settled.ToString("N2") : output.AmountSettled;
+            decimal.TryParse(output.AmountAuthorized, out var authAmount);
+            decimal.TryParse(output.AmountSettled, out var settledAmount);
+            var difference = authAmount - settledAmount;
+            output.Difference = difference.ToString();
+            output.Deductions = string.IsNullOrWhiteSpace(output.Deductions) ? deductions : output.Deductions;
+
+            return output;
         }
 
-        private ClaimInfo ExtractFromFHPL(string text)
+
+        private ClaimInfo ExtractFromFHPL(string text, ClaimInfo output)
         {
-            string patientName = null;
-            var patientMatch = Regex.Match(text, @"Patient Name\s*([A-Za-z\s]+)Main Mem Name\s*([A-Za-z\s]+)", RegexOptions.IgnoreCase);
-            if (patientMatch.Success)
-            {
-                patientName = $"{patientMatch.Groups[1].Value.Trim()}";
-            }
-            // Claim ID (Uhid No)
-            string uhidNo = ExtractValue(text, @"Claim ID\s*:\s*(\d+)", RegexOptions.IgnoreCase);
+            if (output == null)
+                output = new ClaimInfo();
+            string sourceName = ExtractValue(text, @"TPA/Corporate\(\d+\)\s*:\s*(.+?)(?:\r?\n|Bed\s|Ward\s|$)", RegexOptions.IgnoreCase);
+
+            string patient = ExtractValue(text, @"PatientName\s*:\s*([A-Z]+)(?=[A-Z][a-zA-Z]*[:*])");
+
+            string uhidNo = ExtractValue(text, @"ClaimRegistrationNumber\s*:\s*(\d+)");
 
             // Main UHID No
             string mainUhid = ExtractValue(text, @"Main Uhid No\s*(NIC\d+)", RegexOptions.IgnoreCase);
 
-            // Hospital Name
-            string hospital = ExtractValue(text, @"Hospital Name\s*(.*?)\s*Admission Date", RegexOptions.IgnoreCase);
-
             // Admission Date
-            string doa = ExtractValue(text, @"Admission Date\s*(\d{1,2} \w{3,9} \d{4})", RegexOptions.IgnoreCase);
+            string doa = ExtractValue(text, @"DateofAdmission\s*:\s*(\d{2}-\d{2}-\d{4})");
+
+            string authAmount = ExtractValue(text, @"authorizedfinalamountofRs\.(\d+)");
 
             // Billed Amount (this appears before Claimed Amount — be careful!)
-            string billedAmountRaw = ExtractValue(text, @"Billed Amount\s*(\d+)", RegexOptions.IgnoreCase);
+            string billedAmountRaw = ExtractValue(text, @"ClaimedAmount\s*:\s*(\d+)", RegexOptions.IgnoreCase);
 
             // Settled Amount
-            string settledAmountRaw = ExtractValue(text, @"Settled Amount\s*(\d+)", RegexOptions.IgnoreCase);
+            string settledAmountRaw = ExtractValue(text, @"CashlessAuthorizedAmount\s*:\s*(\d+)", RegexOptions.IgnoreCase);
 
             // Disallowence Reason block (ends at "claim <claimno>" or similar punctuation)
             string deductions = ExtractValue(text, @"DisallowenceReason\s*(.+?)(?=Cheque Details|$)", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+            string finalBill = ExtractValue(text, @"Total Discount\s+[\d,]+\.\d{2}\s+([\d,]+\.\d{2})");
+
+            decimal.TryParse(finalBill?.Replace(",", ""), out var finalAmount);
 
             // Convert numbers
             decimal.TryParse(billedAmountRaw, out var billed);
             decimal.TryParse(settledAmountRaw, out var settled);
 
-            return new ClaimInfo
-            {
-                Source="HDFC Bank",
-                Patient = patientName,
-                ClaimNumber = uhidNo,
-               // PolicyNumber = mainUhid,
-                DOA = doa,
-                AmountClaimed = billed.ToString("N2"),
-                AmountSettled = settled.ToString("N2"),
-                Difference = (billed - settled).ToString("N2"),
-                Deductions = deductions?.Trim()
-            };
-        }
+            output.Source = string.IsNullOrWhiteSpace(output.Source) ? sourceName : output.Source;
+            output.Patient = string.IsNullOrWhiteSpace(output.Patient) ? patient : output.Patient;
+            output.ClaimNumber = string.IsNullOrWhiteSpace(output.ClaimNumber) ? uhidNo : output.ClaimNumber;
+            output.PolicyNumber = string.IsNullOrWhiteSpace(output.PolicyNumber) ? mainUhid : output.PolicyNumber;
+            output.DOA = string.IsNullOrWhiteSpace(output.DOA) ? doa : output.DOA;
+            output.FinalAmount = string.IsNullOrWhiteSpace(output.FinalAmount) || output.FinalAmount == "0.00" ? finalBill : output.FinalAmount;
+            output.AmountAuthorized = string.IsNullOrWhiteSpace(output.AmountAuthorized) || output.AmountAuthorized == "0.00" ? authAmount : output.AmountAuthorized;
+            output.AmountSettled = string.IsNullOrWhiteSpace(output.AmountSettled) ? settled.ToString("N2") : output.AmountSettled;
+            decimal.TryParse(output.AmountAuthorized, out var authorized);
+            decimal.TryParse(output.AmountSettled, out var settledAmount);
+            var difference = authorized - settledAmount;
+            output.Difference = difference.ToString();
+            output.Deductions = string.IsNullOrWhiteSpace(output.Deductions) ? deductions : output.Deductions;
 
+            return output;
+        }
 
         private string ExtractValue(string input, string pattern, RegexOptions options = RegexOptions.None)
         {
@@ -285,6 +318,53 @@ namespace INC_Care_App.Controllers
             return match.Success ? match.Groups[1].Value.Trim() : null;
         }
 
+        public class AmountExtractor
+        {
+            public long? ConvertWordsToNumber(string words)
+            {
+                if (string.IsNullOrWhiteSpace(words))
+                    return null;
 
+                var dict = new Dictionary<string, long>
+    {
+        { "one", 1 }, { "two", 2 }, { "three", 3 }, { "four", 4 },
+        { "five", 5 }, { "six", 6 }, { "seven", 7 }, { "eight", 8 },
+        { "nine", 9 }, { "ten", 10 }, { "eleven", 11 }, { "twelve", 12 },
+        { "thirteen", 13 }, { "fourteen", 14 }, { "fifteen", 15 },
+        { "sixteen", 16 }, { "seventeen", 17 }, { "eighteen", 18 },
+        { "nineteen", 19 }, { "twenty", 20 }, { "thirty", 30 },
+        { "forty", 40 }, { "fifty", 50 }, { "sixty", 60 },
+        { "seventy", 70 }, { "eighty", 80 }, { "ninety", 90 },
+        { "hundred", 100 }, { "thousand", 1000 }, { "lakhs", 100000 },
+        { "lacs", 100000 }, { "lakh", 100000 }, { "crore", 10000000 }
+    };
+
+                long total = 0;
+                long current = 0;
+
+                var tokens = words.ToLower().Split(new[] { ' ', '-', ',' }, StringSplitOptions.RemoveEmptyEntries);
+
+                foreach (var token in tokens)
+                {
+                    if (dict.TryGetValue(token, out long value))
+                    {
+                        if (value == 100 || value == 1000 || value == 100000 || value == 10000000)
+                        {
+                            current = current == 0 ? 1 : current;
+                            total += current * value;
+                            current = 0;
+                        }
+                        else
+                        {
+                            current += value;
+                        }
+                    }
+                }
+
+                return total + current;
+            }
+        }
     }
 }
+
+
