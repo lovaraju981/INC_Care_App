@@ -235,8 +235,21 @@ namespace INC_Care_App.Controllers
 
             decimal.TryParse(settledAmountRaw?.Replace(",", ""), out var settled);
 
-            string deductionsRaw = ExtractValue(text, @"Details of deductions\s*:\s*(.*?)(?=Sincerely yours|TEAM)", RegexOptions.Singleline) ?? ExtractValue(text, @"Disallowance Reason\s*:?\s*(.*?)\n", RegexOptions.Singleline | RegexOptions.IgnoreCase)
-        ;
+            string deductionsRaw = ExtractValue(text, @"Reason for Deductions?\s*[:\-]?\s*((?:.(?! {2}))+)",RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+            if (!string.IsNullOrEmpty(deductionsRaw))
+            {
+                // Remove Rs. and any numbers
+                deductionsRaw = Regex.Replace(deductionsRaw, @"Rs\.?\s*\d+|\d+", "", RegexOptions.IgnoreCase).Trim();
+
+                // Start from first alphabetic sequence like "Deducted"
+                var alphaStart = Regex.Match(deductionsRaw, @"[A-Za-z].*", RegexOptions.Singleline);
+                if (alphaStart.Success)
+                {
+                    deductionsRaw = alphaStart.Value.Trim();
+                }
+            }
+
             string deductions = deductionsRaw?
                 .Replace("\r\n", "<br>")
                 .Replace("\n", "<br>")
